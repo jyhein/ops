@@ -64,7 +64,59 @@
  * @uses $licenseUrl string URL to license. Only assigned if license should be
  *   included with published submissions.
  * @uses $ccLicenseBadge string An image and text with details about the license
+ * @uses $pubLocaleData Array of e.g. publication's locales and metadata field names to show in multiple languages
  *}
+
+{**
+ * Filter text content of the metadata shown on the page
+ * If adding more filters, see elseif examples below. Filter format with params: e.g. 'default:param'
+ * @param string $value, The value to be filtered
+ * @param array $filters, E.g. ['escape', 'default:""']
+ * @return string, As variable $filteredPubPropValue
+ *}
+ {function filterPubPropValue}
+	{foreach from=$filters item=$filter}
+		{if $filter === 'escape'}
+			{$value=$value|escape}
+		{elseif $filter === 'strip_unsafe_html'}
+			{$value=$value|strip_unsafe_html}
+		{elseif substr($filter, 0, 7) === 'default'} {* default:param *}
+			{$value=$value|default:substr($filter, 8)}
+		{/if}
+	{/foreach}
+	{assign "filteredPubPropValue" value=$value scope="parent" nocache}
+{/function}
+{**
+ * Publication's multilingual data to array for js and page
+ * Filters texts using function filterPubPropValue
+ * @param string $switcher, Required, Switcher's name
+ * @param array $data, Required, E.g. $publication->getTitles('html')
+ * @param array $localeOrder, Required, From $pubLocaleData.localeOrder
+ * @param array $filters, Optional, E.g. ['escape']
+ * @param string $separator, Optional but required to implode array (e.g. keywords)
+ * @return array, As varaible $wrappedPubPropData
+ *}
+{function wrapPubPropData}
+	{* Find the default locale from the data *}
+	{foreach from=$localeOrder item=$defaultLocale}
+		{if isset($data[$defaultLocale])}{break}{/if}
+	{/foreach}
+	{* Filter the data items using the function filterPubPropValue *}
+	{foreach from=$data item=$value key=$locale}
+		{* Join array items with separator, e.g. keywords *}
+		{if is_array($value)}
+			{$value=$separator|join:$value}
+		{/if}
+		{filterPubPropValue value=$value filters=$filters}
+		{$data[$locale]=$filteredPubPropValue}
+	{/foreach}
+	{$d=['switcher' => $switcher, 'data' => $data, 'defaultLocale' => $defaultLocale]}
+	{assign "wrappedPubPropData" value=$d scope="parent" nocache}
+{/function}
+
+{* Language switchers' buttons text contents: locale names can be used instead of lang attribute codes by removing the line under this comment. *}
+{$pubLocaleData.localeNames = $pubLocaleData.langAttrs}
+
 <article class="obj_preprint_details">
 
 	{* Indicate if this is only a preview *}
@@ -109,14 +161,41 @@
 	<span class="separator">{translate key="navigation.breadcrumbSeparator"}</span>
 	<span class="preprint_version">{translate key="publication.version" version=$publication->getData('version')}</span>
 
-	<h1 class="page_title">
-		{$publication->getLocalizedTitle(null, 'html')|strip_unsafe_html}
+	{** Example usage of the language switcher, title and subtitle
+	 * In h1, the attribute data-pkp-switcher-data="title" and, in h2, the attribute data-pkp-switcher-data="subtitle" are used to sync the text content in elements when
+	 * the language is switched. 
+	 * The attribute data-pkp-switcher="titles" is the container for the switcher's buttons, it needs to match json's switcher-key's value, e.g. {"title":{"switcher":"titles"...
+	 * The function wrapPubPropData wraps publication data for the json and the tpl, e.g. $pubLocaleData.title=$wrappedPubPropData,
+	 *  $pubLocaleData's title-key needs to match data-pkp-switcher-data'-attribute's value, e.g. data-pkp-switcher-data="title". This is for to sync the data in the correct element.
+	 * See all the examples below.
+	 * The rest of the work is handled by the js code.
+	 *}
+	{* Publication title for json *}
+	{wrapPubPropData switcher="titles" data=$publication->getTitles('html') localeOrder=$pubLocaleData.localeOrder filters=['strip_unsafe_html']}
+	{$pubLocaleData.title=$wrappedPubPropData}
+	<h1
+		class="page_title"
+		data-pkp-switcher-data="title"
+		lang="{$pubLocaleData.langAttrs[$pubLocaleData.title.defaultLocale]}"
+	>
+		{$pubLocaleData.title.data[$pubLocaleData.title.defaultLocale]}
 	</h1>
 
-	{if $publication->getLocalizedData('subtitle')}
-		<h2 class="subtitle">
-			{$publication->getLocalizedSubTitle(null, 'html')|strip_unsafe_html}
+	{if $publication->getSubTitles('html')}
+		{* Publication subtitle for json *}
+		{wrapPubPropData switcher="titles" data=$publication->getSubTitles('html') localeOrder=$pubLocaleData.localeOrder filters=['strip_unsafe_html']}
+		{$pubLocaleData.subtitle=$wrappedPubPropData}
+		<h2
+			class="subtitle"
+			data-pkp-switcher-data="subtitle"
+			lang="{$pubLocaleData.langAttrs[$pubLocaleData.subtitle.defaultLocale]}"
+		>
+			{$pubLocaleData.subtitle.data[$pubLocaleData.subtitle.defaultLocale]}
 		</h2>
+	{/if}
+	{* Title and subtitle common switcher *}
+	{if isset($pubLocaleData.opts.title)}
+		<span aria-label="{translate key="plugins.themes.default.languageSwitcher.ariaDescription.titles"}" role="none" aria-orientation="horizontal" data-pkp-switcher="titles"></span>
 	{/if}
 
 	<div class="row">
@@ -129,10 +208,21 @@
 						<li>
 							<span class="name">
 								{$author->getFullName()|escape}
+								{* Author switcher *}
+								{if isset($pubLocaleData.opts.author)}
+									<span aria-label="{translate key="plugins.themes.default.languageSwitcher.ariaDescription.author"}" role="none" aria-orientation="horizontal" aria-expanded="false" data-pkp-switcher="author{$author@index}"></span>
+								{/if}
 							</span>
-							{if $author->getLocalizedData('affiliation')}
-								<span class="affiliation">
-									{$author->getLocalizedData('affiliation')|escape}
+							{if $author->getData('affiliation')}
+								{* Publication author for json *}
+								{wrapPubPropData switcher="author{$author@index}" data=$author->getData('affiliation') localeOrder=$pubLocaleData.localeOrder filters=['strip_unsafe_html']}
+								{$pubLocaleData["author{$author@index}"]=$wrappedPubPropData}
+								<span
+									class="affiliation"
+									data-pkp-switcher-data="author{$author@index}"
+									lang="{$pubLocaleData.langAttrs[$pubLocaleData["author{$author@index}"].defaultLocale]}"
+								>
+									{$pubLocaleData["author{$author@index}"].data[$pubLocaleData["author{$author@index}"].defaultLocale]}
 								</span>
 							{/if}
 							{if $author->getData('orcid')}
@@ -171,25 +261,53 @@
 			{/if}
 
 			{* Keywords *}
-			{if !empty($publication->getLocalizedData('keywords'))}
-			<section class="item keywords">
-				<h2 class="label">
-					{capture assign=translatedKeywords}{translate key="preprint.subject"}{/capture}
-					{translate key="semicolon" label=$translatedKeywords}
-				</h2>
-				<span class="value">
-					{foreach name="keywords" from=$publication->getLocalizedData('keywords') item="keyword"}
-						{$keyword|escape}{if !$smarty.foreach.keywords.last}{translate key="common.commaListSeparator"}{/if}
-					{/foreach}
-				</span>
-			</section>
+			{if $publication->getData('keywords')}
+				{* Publication keywords for json *}
+				{capture assign=keywordSeparator}{translate key="common.commaListSeparator"}{/capture}
+				{wrapPubPropData switcher="keywords" data=$publication->getData('keywords') localeOrder=$pubLocaleData.localeOrder filters=['escape'] separator=$keywordSeparator}
+				{$pubLocaleData.keywords=$wrappedPubPropData}
+				<section class="item keywords">
+					<h2 class="label">
+						{capture assign=translatedKeywords}{translate key="common.keywords"}{/capture}
+						{translate key="semicolon" label=$translatedKeywords}
+					</h2>
+					<span>
+						<span
+							class="value"
+							lang="{$pubLocaleData.langAttrs[$pubLocaleData.keywords.defaultLocale]}"
+							data-pkp-switcher-data="keywords"
+						>
+							{$pubLocaleData.keywords.data[$pubLocaleData.keywords.defaultLocale]}
+						</span>
+						{* Keyword switcher *}
+						{if isset($pubLocaleData.opts.keywords)}
+							<span aria-label="{translate key="plugins.themes.default.languageSwitcher.ariaDescription.keywords"}" role="none" aria-orientation="horizontal" aria-expanded="false" data-pkp-switcher="keywords"></span>
+						{/if}
+					</span>
+				</section>
 			{/if}
 
 			{* Abstract *}
-			{if $publication->getLocalizedData('abstract')}
+			{if $publication->getData('abstract')}
+				{* Publication abstract for json *}
+				{wrapPubPropData switcher="abstract" data=$publication->getData('abstract') localeOrder=$pubLocaleData.localeOrder filters=['strip_unsafe_html']}
+				{$pubLocaleData.abstract=$wrappedPubPropData}
 				<section class="item abstract">
-					<h2 class="label">{translate key="common.abstract"}</h2>
-					{$publication->getLocalizedData('abstract')|strip_unsafe_html}
+					<div>
+						<h2 class="label">
+							{translate key="common.abstract"}
+						</h2>
+						{* Abstract switcher *}
+						{if isset($pubLocaleData.opts.abstract)}
+							<span aria-label="{translate key="plugins.themes.default.languageSwitcher.ariaDescription.abstract"}" role="none" aria-orientation="horizontal" aria-expanded="false" data-pkp-switcher="abstract"></span>
+						{/if}
+					</div>
+					<div
+						data-pkp-switcher-data="abstract"
+						lang="{$pubLocaleData.langAttrs[$pubLocaleData.abstract.defaultLocale]}"
+					>
+						{$pubLocaleData.abstract.data[$pubLocaleData.abstract.defaultLocale]}
+					</div>
 				</section>
 			{/if}
 
@@ -487,3 +605,11 @@
 	</div><!-- .row -->
 
 </article>
+
+<script type="text/javascript">
+	/* Publication multilingual data to json for js
+	 * Grave accent (`) had to be encoded, otherwise json parse error
+	 */
+	{$pubLocaleDataJson=$pubLocaleData|json_encode|replace:'`':'&#96;'|escape:'javascript':'UTF-8'}
+	var pubLocaleDataJson = "{$pubLocaleDataJson}";
+</script>
